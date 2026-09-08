@@ -1,0 +1,863 @@
+"use client";
+
+import { useState } from "react";
+import { SpecialistResult, SynthesisReport, BenchmarkSummary } from "@/types";
+import { PipelineVisualizer } from "./PipelineVisualizer";
+import { OrganRiskMap } from "./OrganRiskMap";
+import { SynthesisCallout } from "./SynthesisCallout";
+import { ClinicalWarningLegend } from "./ClinicalWarningLegend";
+import { HoverScale } from "@/components/animations/HoverScale";
+
+interface SwarmDiagnosticsTabsProps {
+  specialists: SpecialistResult[];
+  synthesis: SynthesisReport | null;
+  isLoading: boolean;
+  patientId: string | null;
+  llmStatus: string;
+  llmModel: string | null;
+  benchmark?: BenchmarkSummary | null;
+}
+
+const specialistMeta: Record<string, { label: string; themeColor: string }> = {
+  renal: { label: "Renal Specialist", themeColor: "indigo" },
+  neuropathy: { label: "Neuropathy Specialist", themeColor: "violet" },
+  retinal: { label: "Retinal Specialist", themeColor: "amber" },
+  cardiovascular: { label: "Cardiovascular Specialist", themeColor: "rose" },
+};
+
+function SpecialistIcon({ type, className = "h-5 w-5" }: { type: string; className?: string }) {
+  switch (type) {
+    case "renal":
+      return (
+        <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3c2.755 0 5.455.232 8.083.678.533.09.917.556.917 1.096v1.044a2.25 2.25 0 01-.659 1.591l-5.432 5.432a2.25 2.25 0 00-.659 1.591v2.927a2.25 2.25 0 01-1.244 2.013L9.75 21.75v-6.774a2.25 2.25 0 00-.659-1.591L3.659 7.955A2.25 2.25 0 013 6.364V5.318c0-.54.384-1.006.917-1.096A48.32 48.32 0 0112 3z" />
+        </svg>
+      );
+    case "neuropathy":
+      return (
+        <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+        </svg>
+      );
+    case "retinal":
+      return (
+        <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M2.458 12C3.732 7.943 7.523 5 12 5c4.477 0 8.268 2.943 9.542 7-1.274 4.057-5.065 7-9.542 7-4.477 0-8.268-2.943-9.542-7z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      );
+    case "cardiovascular":
+      return (
+        <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" />
+        </svg>
+      );
+    default:
+      return (
+        <svg className={className} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.5 6h9.75M10.5 6a1.5 1.5 0 11-3 0m3 0a1.5 1.5 0 10-3 0M3.75 6H7.5m3 12h9.75m-9.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-3.75 0H7.5m9-6h3.75m-3.75 0a1.5 1.5 0 01-3 0m3 0a1.5 1.5 0 00-3 0m-9.75 0h9.75" />
+        </svg>
+      );
+  }
+}
+
+// Renders the provider badge shown on each code-log card (specialist and
+// synthesis). Previously both providers reused the same lightning-bolt icon
+// in a fixed indigo badge regardless of which one actually ran, which made
+// AMD/Gemma and Fireworks/GLM runs visually indistinguishable in the logs.
+// Now picks a distinct icon + color per provider, matching the same
+// orange (AMD) / zinc (GLM) tagging already used in ProviderSwitcher.
+function ProviderBadge({ llmStatus, llmModel }: { llmStatus: string; llmModel: string | null }) {
+  const isAmd = !!llmStatus?.startsWith("amd_notebook");
+  const label = llmModel ? llmModel.split('/').pop()?.toUpperCase() : (llmStatus?.toUpperCase() || "FIREWORKS");
+
+  const colorClasses = isAmd
+    ? "bg-orange-50 border-orange-100/50 text-orange-700"
+    : "bg-zinc-100 border-zinc-200/70 text-zinc-700";
+
+  return (
+    <span className={`rounded-full border px-2.5 py-0.5 text-[10px] font-bold tracking-wide flex items-center gap-1.5 max-w-[250px] ${colorClasses}`}>
+      {isAmd ? (
+        // AMD/Gemma: chip icon, reads as "real hardware"
+        <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.25 3v1.5M4.5 8.25H3m18 0h-1.5M4.5 12H3m18 0h-1.5m-15 3.75H3m18 0h-1.5M8.25 19.5V21M12 3v1.5m0 15V21m3.75-18v1.5m0 15V21m-9-1.5h10.5a2.25 2.25 0 002.25-2.25V6.75a2.25 2.25 0 00-2.25-2.25H6.75A2.25 2.25 0 004.5 6.75v10.5a2.25 2.25 0 002.25 2.25z" />
+        </svg>
+      ) : (
+        // Fireworks/GLM: flame icon, ties back to the "Fireworks" brand name
+        <svg className="h-3 w-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.362 5.214A8.252 8.252 0 0112 21 8.25 8.25 0 016.038 7.048 8.287 8.287 0 009 9.6a8.983 8.983 0 013.361-6.867 8.21 8.21 0 003 2.48z" />
+        </svg>
+      )}
+      <span className="truncate">{label}</span>
+    </span>
+  );
+}
+
+const labLabels: Record<string, string> = {
+  egfr: "eGFR (Kidney Function)",
+  uacr_mg_g: "UACR (Albumin/Creatinine Ratio)",
+  creatinine_mg_dl: "Serum Creatinine",
+  ldl_mg_dl: "LDL Cholesterol",
+  hdl_mg_dl: "HDL Cholesterol",
+  triglycerides_mg_dl: "Triglycerides",
+  systolic_bp: "Systolic Blood Pressure",
+  a1c_percent: "HbA1c Percentage",
+  years_with_diabetes: "Duration of Diabetes",
+};
+
+export function SwarmDiagnosticsTabs({
+  specialists = [],
+  synthesis,
+  isLoading,
+  patientId,
+  llmStatus,
+  llmModel,
+  benchmark,
+}: SwarmDiagnosticsTabsProps) {
+  const [expandedSpec, setExpandedSpec] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"overview" | "analysis" | "logs" | "benchmark">("overview");
+  const [expandedLogs, setExpandedLogs] = useState<Record<string, boolean>>({});
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
+
+  const ALL_SPECIALIST_KEYS = Object.keys(specialistMeta);
+  const arrivedKeys = new Set(specialists.map((s) => s.specialist));
+  const pendingKeys = isLoading ? ALL_SPECIALIST_KEYS.filter((k) => !arrivedKeys.has(k)) : [];
+
+  const toggleLog = (key: string) => {
+    setExpandedLogs((prev) => ({ ...prev, [key]: !prev[key] }));
+  };
+
+  const handleCopyCode = (code: string, specName: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedCode(specName);
+    setTimeout(() => setCopiedCode(null), 2000);
+  };
+
+  // Average duration across specialists that actually ran, used only for
+  // the benchmark tab's derived fallback object below - not a clinical value.
+  const activeBenchmark = benchmark || (synthesis ? {
+    total_duration_ms: specialists.reduce((acc, s) => acc + s.duration_ms, 0) + (synthesis.duration_ms || 0),
+    agents_run: 5,
+    llm_calls_made: specialists.filter(s => s.used_llm).length + (synthesis.used_llm ? 1 : 0),
+    provider: (synthesis.used_llm ? (llmStatus as any) : null),
+    provider_detail: (synthesis.used_llm ? llmStatus : null),
+  } : null);
+
+  return (
+    <div className="flex flex-col gap-3">
+
+      {/* Horizontally scrollable tab row — no wrapping on any screen size */}
+      <div className="-mx-px flex overflow-x-auto scrollbar-none" style={{ scrollbarWidth: 'none' }}>
+        {(["overview", "analysis", "logs", "benchmark"] as const).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => setActiveTab(tab)}
+            className={`flex-shrink-0 px-3 xs:px-5 py-3 text-sm font-semibold border-b-2 capitalize transition-all duration-200 whitespace-nowrap ${activeTab === tab
+                ? "border-emerald-600 text-emerald-700 font-bold"
+                : "border-transparent text-slate-500 hover:text-slate-700 hover:border-slate-300"
+              }`}
+          >
+            {tab}
+          </button>
+        ))}
+      </div>
+
+      <div className="min-h-[400px] min-w-0">
+        {activeTab === "overview" && (
+          <div className="space-y-6 animate-fade-in min-w-0">
+            <PipelineVisualizer
+              specialists={specialists}
+              synthesis={synthesis}
+              isLoading={isLoading}
+              patientId={patientId}
+            />
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+              <HoverScale className="min-h-[520px] md:h-[580px] rounded-[32px] border border-slate-200 bg-white p-3 sm:p-4 overflow-hidden transition-colors duration-200 hover:border-slate-300 hover:shadow-md lg:col-span-12">
+                <OrganRiskMap
+                  specialists={specialists}
+                  synthesis={synthesis}
+                  isLoading={isLoading}
+                />
+              </HoverScale>
+            </div>
+          </div>
+        )}
+
+        {activeTab === "analysis" && (
+          <div className="space-y-6 animate-fade-in">
+            {specialists.length === 0 && !isLoading ? (
+              <div className="flex min-h-[300px] flex-col items-center justify-center gap-2 rounded-[32px] border border-dashed border-slate-200 text-center p-8">
+                <svg className="h-10 w-10 text-slate-300 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 12.75L11.25 15 15 9.75M21 12c0 1.268-.63 2.39-1.593 3.068a3.745 3.745 0 01-1.043 3.296 3.745 3.745 0 01-3.296 1.043A3.745 3.745 0 0112 21c-1.268 0-2.39-.63-3.068-1.593a3.746 3.746 0 01-3.296-1.043 3.745 3.745 0 01-1.043-3.296A3.745 3.745 0 013 12c0-1.268.63-2.39 1.593-3.068a3.745 3.745 0 011.043-3.296 3.746 3.746 0 013.296-1.043A3.746 3.746 0 0112 3c1.268 0 2.39.63 3.068 1.593a3.746 3.746 0 013.296 1.043 3.746 3.746 0 011.043 3.296A3.745 3.745 0 0121 12z" />
+                </svg>
+                <p className="text-sm font-semibold text-slate-500">No threshold mapping yet</p>
+                <p className="text-xs text-slate-400 max-w-[280px]">Run the swarm on a patient to see each specialist&apos;s reasoning, referenced labs, and applied cutoffs here.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 gap-3">
+                {specialists.map((spec) => {
+                  const meta = specialistMeta[spec.specialist] ?? { label: spec.specialist.toUpperCase(), themeColor: "slate" };
+                  const thresholdEntries = Object.entries(spec.thresholds_used || {});
+                  const labEntries = Object.entries(spec.input_labs || {});
+
+                  const isExpanded = expandedSpec === spec.specialist;
+
+                  return (
+                    <HoverScale
+                      key={spec.specialist}
+                      className="rounded-[32px] border border-slate-200 bg-white p-4 transition-colors duration-200 hover:border-slate-300 hover:shadow-md"
+                    >
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                        <div className="flex items-center gap-2">
+                          <SpecialistIcon type={spec.specialist} className="h-5 w-5 text-slate-600" />
+                          <h4 className="font-bold text-slate-800">{meta.label}</h4>
+                        </div>
+                        <div className="flex items-center gap-3">
+                          {!spec.available ? (
+                            <span className="rounded-full px-3 py-1 text-xs font-semibold border bg-slate-100 text-slate-500 border-slate-200">
+                              &mdash; Unavailable
+                            </span>
+                          ) : (
+                            <span className={`flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold border ${spec.flag
+                                ? "bg-rose-50 text-rose-700 border-rose-100/50"
+                                : "bg-emerald-50 text-emerald-700 border-emerald-100/50"
+                              }`}>
+                              {spec.flag ? (
+                                <>
+                                  <svg className="h-3 w-3" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" /></svg>
+                                  Anomalies Flagged
+                                </>
+                              ) : (
+                                <>
+                                  <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                                  Clear of Early Flags
+                                </>
+                              )}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {!spec.available ? (() => {
+                        const raw = spec.reasoning || "";
+                        // Extract the last meaningful exception line from the traceback
+                        const lines = raw.split(/\n|\\n/).map((l: string) => l.trim()).filter(Boolean);
+                        // Find the final exception line (e.g. "ZeroDivisionError: float division by zero")
+                        const exceptionLine = [...lines].reverse().find((l: string) =>
+                          /^[A-Za-z]+Error:|^[A-Za-z]+Exception:|^[A-Za-z]+Warning:/.test(l)
+                        );
+                        // Find how many attempts were made
+                        const attemptsMatch = raw.match(/failed\s+(\d+)\s+times?/i);
+                        const attempts = attemptsMatch ? attemptsMatch[1] : null;
+                        // Check if it's a code execution error
+                        const isCodeError = raw.includes("EXECUTION ERROR") || raw.includes("Traceback");
+                        // Brief human-readable summary
+                        const summary = isCodeError
+                          ? exceptionLine
+                            ? exceptionLine.replace(/^[A-Za-z]+Error:\s*/, "").replace(/^[A-Za-z]+Exception:\s*/, "")
+                            : "An unexpected error occurred while running the specialist's analysis code."
+                          : raw.length > 180 ? raw.slice(0, 180) + "…" : raw;
+
+                        return (
+                          <div className="rounded-[32px] border border-dashed border-rose-200 bg-rose-50/40 p-5 space-y-3">
+                            {/* Error type badge */}
+                            <div className="flex items-center gap-2">
+                              <svg className="h-4 w-4 text-rose-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                              </svg>
+                              <span className="text-xs font-bold text-rose-600 uppercase tracking-wider">
+                                {isCodeError ? "Sandbox Execution Failed" : "Analysis Unavailable"}
+                              </span>
+                              {attempts && (
+                                <span className="ml-auto text-[10px] font-semibold text-rose-400 bg-rose-100 rounded-full px-2 py-0.5">
+                                  {attempts} attempt{Number(attempts) !== 1 ? "s" : ""}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Human-readable summary */}
+                            <p className="text-sm text-slate-600 leading-relaxed">
+                              {isCodeError ? (
+                                <>
+                                  The specialist&apos;s LLM-generated code could not complete successfully.{" "}
+                                  <span className="font-semibold text-slate-700">
+                                    Cause: {exceptionLine
+                                      ? exceptionLine.replace(/^[A-Za-z]+Error:\s*/, "").replace(/^[A-Za-z]+Exception:\s*/, "") || exceptionLine
+                                      : "Unknown runtime error."}
+                                  </span>
+                                </>
+                              ) : (
+                                summary
+                              )}
+                            </p>
+
+                            {/* Collapsible technical detail */}
+                            {isCodeError && raw.length > 0 && (
+                              <details className="group">
+                                <summary className="cursor-pointer text-[11px] font-semibold text-rose-500 hover:text-rose-700 transition-colors flex items-center gap-1 select-none list-none">
+                                  <svg className="h-3 w-3 transition-transform group-open:rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                  </svg>
+                                  Show technical trace
+                                </summary>
+                                <pre className="mt-2 rounded-2xl bg-slate-950 border border-slate-800 p-3 text-[10px] text-rose-300/80 font-mono leading-relaxed overflow-x-auto max-h-[200px] scrollbar-thin whitespace-pre-wrap break-words">
+                                  {raw}
+                                </pre>
+                              </details>
+                            )}
+                          </div>
+                        );
+                      })() : (
+                        <div className="space-y-4">
+                          <div className="space-y-2">
+                            <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Clinical Reasoning</h5>
+                            <p className="text-sm text-slate-600 leading-relaxed bg-slate-50/50 p-4 rounded-[32px] border border-slate-100">
+                              {spec.reasoning}
+                            </p>
+                            <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                              <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 font-mono">
+                                <span>Score Risk Level:</span>
+                                <span className={spec.flag ? "text-rose-600" : (spec.risk_score ?? 0) >= 0.4 ? "text-amber-600" : "text-emerald-600"}>
+                                  {spec.risk_score !== null ? `${(spec.risk_score * 100).toFixed(0)}%` : "N/A"}
+                                </span>
+                              </div>
+                              <button
+                                onClick={() => setExpandedSpec(isExpanded ? null : spec.specialist)}
+                                className="flex items-center gap-1.5 rounded-full bg-slate-100 px-3 py-1.5 text-xs font-semibold text-slate-600 hover:bg-slate-200 transition-colors border border-slate-200"
+                              >
+                                {isExpanded ? "Less Details" : "More Details"}
+                                <svg className={`h-3.5 w-3.5 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </button>
+                            </div>
+                          </div>
+
+                          {isExpanded && (
+                            <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 pt-4 border-t border-slate-100">
+                              <div className="space-y-2">
+                                <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Patient Values Referenced</h5>
+                                <div className="rounded-[32px] border border-slate-200 bg-slate-50/20 divide-y divide-slate-200">
+                                  {labEntries.length === 0 ? (
+                                    <p className="p-3 text-xs text-slate-400 italic">No lab values recorded for this specialist.</p>
+                                  ) : labEntries.map(([labKey, val]) => (
+                                    <div key={labKey} className="flex items-center justify-between px-4 py-2.5 text-sm">
+                                      <span className="font-semibold text-slate-700">{labLabels[labKey] || labKey}</span>
+                                      <span className="font-mono text-slate-600">{typeof val === "number" ? val.toFixed(val % 1 === 0 ? 0 : 2) : String(val)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                              </div>
+
+                              <div className="space-y-2">
+                                <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">
+                                  Cutoffs The Model Applied This Run
+                                </h5>
+                                <div className="rounded-[32px] border border-slate-200 bg-slate-50/20 divide-y divide-slate-200">
+                                  {thresholdEntries.length === 0 ? (
+                                    <p className="p-3 text-xs text-slate-400 italic">
+                                      The model didn&apos;t report explicit numeric thresholds for this run &mdash; see the reasoning text above.
+                                    </p>
+                                  ) : thresholdEntries.map(([label, val]) => (
+                                    <div key={label} className="flex items-center justify-between px-4 py-2.5 text-sm">
+                                      <span className="font-semibold text-slate-700">{label}</span>
+                                      <span className="font-mono text-slate-600">{typeof val === "number" ? val.toFixed(val % 1 === 0 ? 0 : 2) : String(val)}</span>
+                                    </div>
+                                  ))}
+                                </div>
+                                <p className="text-[10px] text-slate-400 leading-relaxed">
+                                  These are the exact cutoffs the model reported using this run &mdash; not a fixed reference table. They may vary patient to patient.
+                                </p>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </HoverScale>
+                  );
+                })}
+
+                {pendingKeys.map((key) => {
+                  const meta = specialistMeta[key];
+                  return (
+                    <div key={key} className="rounded-[32px] border border-slate-200 bg-white p-4 animate-pulse">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                        <div className="flex items-center gap-2">
+                          <SpecialistIcon type={key} className="h-5 w-5 text-slate-300" />
+                          <h4 className="font-bold text-slate-400">{meta.label}</h4>
+                        </div>
+                        <span className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold border bg-sky-50 text-sky-600 border-sky-100">
+                          <span className="h-3 w-3 animate-spin rounded-full border border-sky-500 border-t-transparent" />
+                          Analyzing&hellip;
+                        </span>
+                      </div>
+                      <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+                        <div className="lg:col-span-6 space-y-2">
+                          <div className="h-3 w-32 rounded-full bg-slate-100" />
+                          <div className="h-16 rounded-[32px] bg-slate-50 border border-slate-100" />
+                        </div>
+                        <div className="lg:col-span-6 space-y-2">
+                          <div className="h-3 w-40 rounded-full bg-slate-100" />
+                          <div className="h-16 rounded-[32px] bg-slate-50 border border-slate-100" />
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Synthesis Agent — consolidates the 4 specialist findings into one referral recommendation */}
+                {synthesis && (
+                  <HoverScale className="rounded-[32px] border border-slate-200 bg-white p-4 transition-colors duration-200 hover:border-slate-300 hover:shadow-md">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                      <div className="flex items-center gap-2">
+                        <svg className="h-5 w-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+                        </svg>
+                        <h4 className="font-bold text-slate-800">Synthesis Agent</h4>
+                      </div>
+                      {synthesis.available ? (
+                        <span className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold border bg-emerald-50 text-emerald-700 border-emerald-100/50">
+                          <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                          Consensus Reached
+                        </span>
+                      ) : (
+                        <span className="rounded-full px-3 py-1 text-xs font-semibold border bg-slate-100 text-slate-500 border-slate-200">
+                          &mdash; Unavailable
+                        </span>
+                      )}
+                    </div>
+
+                    {synthesis.available ? (
+                      <div className="space-y-4">
+                        <div className="space-y-2">
+                          <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Highest Risk Trajectory</h5>
+                          <p className="text-sm text-slate-600 leading-relaxed bg-slate-50/50 p-4 rounded-[32px] border border-slate-100">
+                            {synthesis.top_concern || "No dominant risk identified this run."}
+                          </p>
+                        </div>
+                        <div className="space-y-2">
+                          <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Clinical Recommendation</h5>
+                          <p className="text-sm text-slate-600 leading-relaxed bg-slate-50/50 p-4 rounded-[32px] border border-slate-100">
+                            {synthesis.recommendation}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 text-xs font-semibold text-slate-400 font-mono">
+                          <span>Consolidated from:</span>
+                          <span className="text-slate-600">{specialists.length} specialist agent{specialists.length !== 1 ? "s" : ""}</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <div className="rounded-[32px] border border-dashed border-rose-200 bg-rose-50/40 p-5 space-y-2">
+                        <div className="flex items-center gap-2">
+                          <svg className="h-4 w-4 text-rose-500 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                          </svg>
+                          <span className="text-xs font-bold text-rose-600 uppercase tracking-wider">Synthesis Unavailable</span>
+                        </div>
+                        <p className="text-sm text-slate-600 leading-relaxed">
+                          {synthesis.synthesis_error || "The synthesis agent could not reach an LLM to combine specialist findings this run."}
+                        </p>
+                      </div>
+                    )}
+                  </HoverScale>
+                )}
+
+                {isLoading && !synthesis && specialists.length > 0 && (
+                  <div className="rounded-[32px] border border-slate-200 bg-white p-4 animate-pulse">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-4">
+                      <div className="flex items-center gap-2">
+                        <svg className="h-5 w-5 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                        </svg>
+                        <h4 className="font-bold text-slate-400">Synthesis Agent</h4>
+                      </div>
+                      <span className="flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-semibold border bg-sky-50 text-sky-600 border-sky-100">
+                        <span className="h-3 w-3 animate-spin rounded-full border border-sky-500 border-t-transparent" />
+                        Building consensus&hellip;
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-3">
+                      <div className="lg:col-span-6 space-y-2">
+                        <div className="h-3 w-32 rounded-full bg-slate-100" />
+                        <div className="h-16 rounded-[32px] bg-slate-50 border border-slate-100" />
+                      </div>
+                      <div className="lg:col-span-6 space-y-2">
+                        <div className="h-3 w-40 rounded-full bg-slate-100" />
+                        <div className="h-16 rounded-[32px] bg-slate-50 border border-slate-100" />
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === "logs" && (
+          <div className="space-y-6 animate-fade-in">
+            {specialists.length === 0 && !isLoading ? (
+              <div className="flex min-h-[300px] flex-col items-center justify-center gap-2 rounded-[32px] border border-dashed border-slate-200 text-center p-8">
+                <svg className="h-10 w-10 text-slate-300 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                </svg>
+                <p className="text-sm font-semibold text-slate-500">No execution traces yet</p>
+                <p className="text-xs text-slate-400 max-w-[280px]">Run the swarm to see each agent&apos;s step-by-step trace and the sandboxed Python it actually executed.</p>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {specialists.map((spec) => {
+                  const meta = specialistMeta[spec.specialist] ?? { label: spec.specialist.toUpperCase(), themeColor: "slate" };
+                  const isExpanded = !!expandedLogs[spec.specialist];
+                  return (
+                    <HoverScale
+                      key={spec.specialist}
+                      className="rounded-[32px] border border-slate-200 bg-white overflow-hidden transition-colors duration-200 hover:border-slate-300 hover:shadow-md"
+                    >
+                      <div className="p-5 bg-slate-50/40 border-b border-slate-100">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <SpecialistIcon type={spec.specialist} className="h-5 w-5 text-slate-600" />
+                            <div className="text-left">
+                              <h4 className="font-bold text-slate-800">{meta.label} Code Log</h4>
+                              <div className="flex items-center gap-2 text-xs font-mono text-slate-400 mt-0.5">
+                                <span>Duration: {spec.duration_ms} ms</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            {spec.available ? (
+                              <ProviderBadge llmStatus={llmStatus} llmModel={llmModel} />
+                            ) : (
+                              <span className="rounded-full bg-slate-100 border border-slate-200 px-2.5 py-0.5 text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                                Unavailable
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-6 space-y-2">
+                          <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Execution Steps Trace</h5>
+                          <ol className="relative border-l border-slate-200 ml-2.5 space-y-4">
+                            {spec.steps.map((step, idx) => (
+                              <li key={idx} className="mb-4 ml-6">
+                                <span className="absolute flex items-center justify-center w-5 h-5 bg-sky-50 text-sky-600 rounded-full -left-2.5 border border-sky-100 font-mono text-[10px] font-bold">
+                                  {idx + 1}
+                                </span>
+                                <p className="text-sm text-slate-600 font-medium leading-relaxed">{step}</p>
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      </div>
+
+                      {spec.code_used && (
+                        <>
+                          <button
+                            onClick={() => toggleLog(spec.specialist)}
+                            className="w-full flex items-center justify-center p-3 text-xs font-semibold transition-colors border-t border-slate-100 dark:border-slate-700/50 bg-indigo-50/60 hover:bg-indigo-100/60 text-indigo-700 hover:text-indigo-900 dark:bg-indigo-900/20 dark:hover:bg-indigo-900/40 dark:text-indigo-300 dark:hover:text-indigo-100"
+                          >
+                            <div className="flex items-center gap-2">
+                              {isExpanded ? "Hide Executed Code" : "View Executed Sandbox Python Code"}
+                              <svg
+                                className={`h-4 w-4 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
+                                fill="none"
+                                viewBox="0 0 24 24"
+                                stroke="currentColor"
+                              >
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                              </svg>
+                            </div>
+                          </button>
+
+                          {isExpanded && (
+                            <div className="p-4 space-y-2 bg-white animate-slide-down border-t border-slate-100">
+                              <div className="flex items-center justify-between">
+                                <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Executed Sandbox Python Code</h5>
+                                <button
+                                  onClick={() => handleCopyCode(spec.code_used!, spec.specialist)}
+                                  className="text-xs font-semibold text-emerald-600 hover:text-emerald-500 transition-colors flex items-center gap-1.5"
+                                >
+                                  {copiedCode === spec.specialist ? "✓ Copied" : "Copy Code"}
+                                </button>
+                              </div>
+                              <pre className="rounded-[32px] border border-slate-900 bg-slate-950 p-4 overflow-x-auto text-xs text-emerald-400/90 font-mono leading-relaxed shadow-inner max-h-[300px] scrollbar-thin">
+                                <code>{spec.code_used}</code>
+                              </pre>
+                            </div>
+                          )}
+                        </>
+                      )}
+                    </HoverScale>
+                  );
+                })}
+
+                {pendingKeys.map((key) => {
+                  const meta = specialistMeta[key];
+                  return (
+                    <div key={key} className="rounded-[32px] border border-slate-200 bg-white overflow-hidden animate-pulse">
+                      <div className="w-full flex items-center justify-between p-5 bg-slate-50/40 border-b border-slate-100">
+                        <div className="flex items-center gap-3">
+                          <SpecialistIcon type={key} className="h-5 w-5 text-slate-300" />
+                          <div className="text-left">
+                            <h4 className="font-bold text-slate-400">{meta.label} Code Log</h4>
+                            <div className="flex items-center gap-2 text-xs font-mono text-slate-300 mt-0.5">
+                              <span className="h-2.5 w-24 rounded-full bg-slate-100 inline-block" />
+                            </div>
+                          </div>
+                        </div>
+                        <span className="flex items-center gap-1.5 rounded-full bg-sky-50 border border-sky-100 px-2.5 py-0.5 text-[10px] font-bold text-sky-600 uppercase tracking-wide">
+                          <span className="h-2.5 w-2.5 animate-spin rounded-full border border-sky-500 border-t-transparent" />
+                          Running
+                        </span>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Synthesis Agent Code Log — same card pattern as the specialists above; no sandboxed code exists for this stage, so it shows a derived execution trace instead of a code viewer. */}
+                {synthesis && (() => {
+                  const synthesisSteps = synthesis.available
+                    ? [
+                        `Collected findings from ${specialists.length} specialist agent${specialists.length !== 1 ? "s" : ""}`,
+                        `Identified highest risk trajectory: ${synthesis.top_concern ?? "n/a"}`,
+                        `Generated clinical recommendation`,
+                      ]
+                    : [synthesis.synthesis_error || "Synthesis agent could not reach an LLM to combine specialist findings this run."];
+                  return (
+                    <HoverScale className="rounded-[32px] border border-slate-200 bg-white overflow-hidden transition-colors duration-200 hover:border-slate-300 hover:shadow-md">
+                      <div className="p-5 bg-slate-50/40 border-b border-slate-100">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-3">
+                            <svg className="h-5 w-5 text-slate-600" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09zM18.259 8.715L18 9.75l-.259-1.035a3.375 3.375 0 00-2.455-2.456L14.25 6l1.036-.259a3.375 3.375 0 002.455-2.456L18 2.25l.259 1.035a3.375 3.375 0 002.456 2.456L21.75 6l-1.035.259a3.375 3.375 0 00-2.456 2.456z" />
+                            </svg>
+                            <div className="text-left">
+                              <h4 className="font-bold text-slate-800">Synthesis Agent Code Log</h4>
+                              <div className="flex items-center gap-2 text-xs font-mono text-slate-400 mt-0.5">
+                                <span>Duration: {synthesis.duration_ms} ms</span>
+                              </div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-3">
+                            {synthesis.available ? (
+                              <ProviderBadge llmStatus={llmStatus} llmModel={llmModel} />
+                            ) : (
+                              <span className="rounded-full bg-slate-100 border border-slate-200 px-2.5 py-0.5 text-[10px] font-bold text-slate-500 uppercase tracking-wide">
+                                Unavailable
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        <div className="mt-6 space-y-2">
+                          <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Execution Steps Trace</h5>
+                          <ol className="relative border-l border-slate-200 ml-2.5 space-y-4">
+                            {synthesisSteps.map((step, idx) => (
+                              <li key={idx} className="mb-4 ml-6">
+                                <span className="absolute flex items-center justify-center w-5 h-5 bg-sky-50 text-sky-600 rounded-full -left-2.5 border border-sky-100 font-mono text-[10px] font-bold">
+                                  {idx + 1}
+                                </span>
+                                <p className="text-sm text-slate-600 font-medium leading-relaxed">{step}</p>
+                              </li>
+                            ))}
+                          </ol>
+                        </div>
+                      </div>
+
+                      {(synthesis.system_prompt || synthesis.user_prompt || synthesis.raw_response) && (() => {
+                        const isExpanded = !!expandedLogs["synthesis"];
+                        return (
+                          <>
+                            <button
+                              onClick={() => toggleLog("synthesis")}
+                              className="w-full flex items-center justify-center p-3 text-xs font-semibold transition-colors border-t border-slate-100 dark:border-slate-700/50 bg-indigo-50/60 hover:bg-indigo-100/60 text-indigo-700 hover:text-indigo-900 dark:bg-indigo-900/20 dark:hover:bg-indigo-900/40 dark:text-indigo-300 dark:hover:text-indigo-100"
+                            >
+                              <div className="flex items-center gap-2">
+                                {isExpanded ? "Hide LLM Prompt & Response" : "View LLM Prompt & Response"}
+                                <svg
+                                  className={`h-4 w-4 transition-transform duration-200 ${isExpanded ? "rotate-180" : ""}`}
+                                  fill="none"
+                                  viewBox="0 0 24 24"
+                                  stroke="currentColor"
+                                >
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                                </svg>
+                              </div>
+                            </button>
+
+                            {isExpanded && (
+                              <div className="p-4 space-y-4 bg-white animate-slide-down border-t border-slate-100">
+                                {synthesis.system_prompt && (
+                                  <div className="space-y-2">
+                                    <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">System Prompt</h5>
+                                    <pre className="rounded-[32px] border border-slate-900 bg-slate-950 p-4 overflow-x-auto text-xs text-emerald-400/90 font-mono leading-relaxed shadow-inner max-h-[200px] scrollbar-thin whitespace-pre-wrap break-words">
+                                      <code>{synthesis.system_prompt}</code>
+                                    </pre>
+                                  </div>
+                                )}
+                                {synthesis.user_prompt && (
+                                  <div className="space-y-2">
+                                    <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">User Prompt</h5>
+                                    <pre className="rounded-[32px] border border-slate-900 bg-slate-950 p-4 overflow-x-auto text-xs text-emerald-400/90 font-mono leading-relaxed shadow-inner max-h-[200px] scrollbar-thin whitespace-pre-wrap break-words">
+                                      <code>{synthesis.user_prompt}</code>
+                                    </pre>
+                                  </div>
+                                )}
+                                {synthesis.raw_response && (
+                                  <div className="space-y-2">
+                                    <div className="flex items-center justify-between">
+                                      <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider">Raw LLM Response</h5>
+                                      <button
+                                        onClick={() => handleCopyCode(synthesis.raw_response!, "synthesis")}
+                                        className="text-xs font-semibold text-emerald-600 hover:text-emerald-500 transition-colors flex items-center gap-1.5"
+                                      >
+                                        {copiedCode === "synthesis" ? "✓ Copied" : "Copy Response"}
+                                      </button>
+                                    </div>
+                                    <pre className="rounded-[32px] border border-slate-900 bg-slate-950 p-4 overflow-x-auto text-xs text-emerald-400/90 font-mono leading-relaxed shadow-inner max-h-[300px] scrollbar-thin whitespace-pre-wrap break-words">
+                                      <code>{synthesis.raw_response}</code>
+                                    </pre>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                          </>
+                        );
+                      })()}
+                    </HoverScale>
+                  );
+                })()}
+
+                {isLoading && !synthesis && specialists.length > 0 && (
+                  <div className="rounded-[32px] border border-slate-200 bg-white overflow-hidden animate-pulse">
+                    <div className="w-full flex items-center justify-between p-5 bg-slate-50/40 border-b border-slate-100">
+                      <div className="flex items-center gap-3">
+                        <svg className="h-5 w-5 text-slate-300" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.25 12l2.846-.813a4.5 4.5 0 003.09-3.09L9 5.25l.813 2.846a4.5 4.5 0 003.09 3.09L15.75 12l-2.846.813a4.5 4.5 0 00-3.09 3.09z" />
+                        </svg>
+                        <div className="text-left">
+                          <h4 className="font-bold text-slate-400">Synthesis Agent Code Log</h4>
+                          <div className="flex items-center gap-2 text-xs font-mono text-slate-300 mt-0.5">
+                            <span className="h-2.5 w-24 rounded-full bg-slate-100 inline-block" />
+                          </div>
+                        </div>
+                      </div>
+                      <span className="flex items-center gap-1.5 rounded-full bg-sky-50 border border-sky-100 px-2.5 py-0.5 text-[10px] font-bold text-sky-600 uppercase tracking-wide">
+                        <span className="h-2.5 w-2.5 animate-spin rounded-full border border-sky-500 border-t-transparent" />
+                        Running
+                      </span>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+
+        {activeTab === "benchmark" && (
+          <div className="space-y-6 animate-fade-in">
+            {activeBenchmark ? (
+              <HoverScale className="rounded-[32px] border border-slate-200 bg-white p-4 transition-colors duration-200 hover:border-slate-300 hover:shadow-md">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3 mb-6">
+                  <div>
+                    <h4 className="font-bold text-slate-800">Swarm Performance Diagnostics</h4>
+                    <p className="text-[10px] uppercase tracking-wider text-slate-400 font-medium">Latency & API Call Audits</p>
+                  </div>
+                  <span className="rounded-full bg-sky-50 border border-sky-100/50 px-3 py-1 text-xs font-semibold text-sky-700 font-mono">
+                    Provider: {activeBenchmark.provider_detail || activeBenchmark.provider || "None (LLM Unreachable)"}
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-8">
+                  <div className="rounded-[32px] border border-slate-100 bg-slate-50/50 p-4 text-center">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Duration</span>
+                    <p className="mt-1 text-2xl font-bold tracking-tight text-slate-800">{activeBenchmark.total_duration_ms} ms</p>
+                  </div>
+                  <div className="rounded-[32px] border border-slate-100 bg-slate-50/50 p-4 text-center">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Agents Executed</span>
+                    <p className="mt-1 text-2xl font-bold tracking-tight text-slate-800">{activeBenchmark.agents_run}</p>
+                  </div>
+                  <div className="rounded-[32px] border border-slate-100 bg-slate-50/50 p-4 text-center">
+                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">LLM API Calls</span>
+                    <p className="mt-1 text-2xl font-bold tracking-tight text-slate-800">{activeBenchmark.llm_calls_made}</p>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <h5 className="text-[11px] font-bold text-slate-400 uppercase tracking-wider mb-2">Wall-Clock Latency breakdown</h5>
+                  <div className="space-y-3">
+                    {specialists.map((spec) => {
+                      const meta = specialistMeta[spec.specialist] ?? { label: spec.specialist.toUpperCase() };
+                      const pct = activeBenchmark.total_duration_ms > 0
+                        ? Math.max(2, Math.min(100, (spec.duration_ms / activeBenchmark.total_duration_ms) * 100))
+                        : 2;
+                      return (
+                        <div key={spec.specialist} className="space-y-1">
+                          <div className="flex justify-between text-xs font-semibold text-slate-600">
+                            <span>{meta.label}</span>
+                            <span className="font-mono">{spec.duration_ms} ms</span>
+                          </div>
+                          <div className="h-3 rounded-full bg-slate-100 overflow-hidden relative">
+                            <div
+                              className="h-full rounded-full bg-gradient-to-r from-sky-400 to-sky-500 transition-all duration-500"
+                              style={{ width: `${pct}%` }}
+                            />
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {synthesis && (
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-xs font-semibold text-slate-600">
+                          <span>Synthesis Consolidator</span>
+                          <span className="font-mono">{synthesis.duration_ms || 0} ms</span>
+                        </div>
+                        <div className="h-3 rounded-full bg-slate-100 overflow-hidden relative">
+                          <div
+                            className="h-full rounded-full bg-gradient-to-r from-emerald-400 to-emerald-500 transition-all duration-500"
+                            style={{
+                              width: `${activeBenchmark.total_duration_ms > 0
+                                ? Math.max(2, Math.min(100, ((synthesis.duration_ms || 0) / activeBenchmark.total_duration_ms) * 100))
+                                : 2}%`
+                            }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {llmModel && (
+                  <div className="mt-6 border-t border-slate-100 pt-4 flex items-center justify-between text-xs text-slate-400 font-mono">
+                    <span>Active LLM Model</span>
+                    <span className="text-slate-600 font-semibold">{llmModel}</span>
+                  </div>
+                )}
+              </HoverScale>
+            ) : (
+              <div className="flex min-h-[300px] flex-col items-center justify-center gap-2 rounded-[32px] border border-dashed border-slate-200 text-center p-8">
+                {isLoading ? (
+                  <>
+                    <span className="h-8 w-8 animate-spin rounded-full border-2 border-sky-500 border-t-transparent mb-1" />
+                    <p className="text-sm font-semibold text-slate-500">Timing the swarm run&hellip;</p>
+                    <p className="text-xs text-slate-400 max-w-[280px]">Latency and API call diagnostics finalize once the pipeline completes.</p>
+                  </>
+                ) : (
+                  <>
+                    <svg className="h-10 w-10 text-slate-300 mb-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M9 17V9m4 8V5m4 12v-6M5 21h14a2 2 0 002-2V5a2 2 0 00-2-2H5a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                    </svg>
+                    <p className="text-sm font-semibold text-slate-500">No benchmark data yet</p>
+                    <p className="text-xs text-slate-400 max-w-[280px]">Run the swarm to see latency, agent count, and LLM call diagnostics for that pass.</p>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+    </div>
+  );
+}
