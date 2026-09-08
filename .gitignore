@@ -6,3 +6,5 @@ out/
 .env*
 *.tsbuildinfo
 __pycache__/
+.vercel
+.env.local
