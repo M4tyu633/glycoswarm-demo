@@ -415,6 +415,7 @@ export default function AnatomyMap({
       </div>
 
       <Canvas
+        frameloop="demand"
         camera={{ position: [0, 0.05, 2.75], fov: 38 }}
         dpr={[1, 1.75]}
         gl={{ alpha: true, antialias: true }}
@@ -437,14 +438,14 @@ export default function AnatomyMap({
         </Suspense>
         <OrbitControls
           enablePan={false}
-          enableZoom
+          enableZoom={false}
           minDistance={2.1}
           maxDistance={3.4}
           minPolarAngle={Math.PI / 5}
           maxPolarAngle={Math.PI - Math.PI / 5}
-          autoRotate={!reduced}
+          autoRotate={false}
           autoRotateSpeed={1.4}
-          enableDamping
+          enableDamping={!reduced}
           dampingFactor={0.08}
         />
       </Canvas>
